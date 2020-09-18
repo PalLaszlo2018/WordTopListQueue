@@ -13,7 +13,9 @@ import java.util.Arrays;
 import java.util.Date;
 import java.util.HashSet;
 import java.util.Set;
-import java.util.concurrent.Callable;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.logging.ConsoleHandler;
 import java.util.logging.LogRecord;
 import java.util.logging.Logger;
@@ -24,15 +26,16 @@ import java.util.logging.SimpleFormatter;
  *
  * @author laszlop
  */
-public class WordCollector implements Callable {
+public class WordCollector extends Thread {
 
-    private final URL url;
+    private final BlockingQueue<URL> urlQueue;
+    private final CountDownLatch latch;
     private final Set<String> skipTags;
     private final Set<String> skipWords;
     private final Set<Character> separators;
     private final WordStore storer;
-    public final static Logger LOG = Logger.getGlobal(); 
-    
+    public final static Logger LOG = Logger.getGlobal();
+
     static {
         LOG.setUseParentHandlers(false);
         ConsoleHandler handler = new ConsoleHandler();
@@ -47,26 +50,53 @@ public class WordCollector implements Callable {
         LOG.addHandler(handler);
     }
 
-    public WordCollector(URL url, WordStore storer, Set<String> skipWords) {
-        this.url = url;
+    public WordCollector(BlockingQueue<URL> urlQueue, CountDownLatch latch, Set<String> skipWords, WordStore storer) {
+        this.urlQueue = urlQueue;
+        this.latch = latch;
         this.skipTags = new HashSet<>(Arrays.asList("head", "style")); // texts between these tags are ignored
         this.skipWords = skipWords;
         this.separators = new HashSet<>(Arrays.asList(' ', '"', '(', ')', '*', '<', '.', ':', '?', '!', ';', '-', '–', '=', '{', '}',
-                '/', '_', ',', '[', ']'));
+                '/', '_', ',', '[', ']', '|'));
         this.storer = storer;
     }
 
     @Override
-    public Object call() throws Exception {
+    public void run() {
         fillSkipWords();
-        try {
-            processContent(url);
-        } catch (IOException ex) {
-            LOG.severe("Processing of " + url.toString() + " failed.");       
+        while (urlQueue.size() > 0) {
+            URL url = takeURLfromQueue();
+            LOG.info(url + " was taken out from the queue, " + urlQueue.size() + " URL-s remained.");
+            try {
+                processContent(url);
+            } catch (IOException ex) {
+                String urlName = (url == null) ? "unknown" : url.toString();
+                LOG.severe("Processing of " + urlName + " failed.");
+            } finally {
+                synchronized (latch) {
+                    latch.countDown();
+                    String urlName = (url == null) ? "unknown" : url.toString();
+                    LOG.info(urlName + " finished. The current size of the latch is: " + latch.getCount());
+                }
+            }
+        }
+    }
+    
+    /**
+     * Takes out the next URL form the queue thread safe way
+     * @return next URL
+     */
+
+    private synchronized URL takeURLfromQueue() {
+        if (urlQueue.size() > 0) {
+            try {
+                return urlQueue.poll(1000, TimeUnit.MILLISECONDS);
+            } catch (InterruptedException ex) {
+                LOG.severe("Taking out of next URL failed.");
+            }
         }
         return null;
     }
-    
+
     /**
      * Fills up the skipWord Set using the overridden method of WordStore interface
      */
@@ -83,7 +113,7 @@ public class WordCollector implements Callable {
      * @throws IOException
      */
     public void processContent(URL url) throws IOException {
-        LOG.info("Processing of the homepage " + url.toString() + " started");
+        LOG.info("Processing of the homepage " + url.toString() + " started.");
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(url.openStream()))) {
             String openingTag = findOpeningTag(reader);
             eatTag(openingTag, reader);

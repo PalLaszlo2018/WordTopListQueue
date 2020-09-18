@@ -6,14 +6,13 @@
 package wordtoplistqueue;
 
 import java.net.URL;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
-import java.util.concurrent.CompletionService;
-import java.util.concurrent.ExecutorCompletionService;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.logging.Level;
-import java.util.logging.Logger;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CountDownLatch;
+import static wordtoplistqueue.WordCollector.LOG;
 
 /**
  * This class creates the various threads that will collect the words in a common collection
@@ -25,33 +24,31 @@ public class WordCollection {
     List<URL> urlList;
     Set<String> skipWords;
     private final WordStore storer;
+    private static final int MAX_THREADS = 4;
+    private final BlockingQueue<URL> urlQueue;
+    private final CountDownLatch latch;
 
     public WordCollection(List<URL> urlList, WordStore storer, Set<String> skipWords) {
         this.urlList = urlList;
         this.skipWords = skipWords;
         this.storer = storer;
+        urlQueue = new ArrayBlockingQueue(urlList.size(), false, urlList);
+        latch = new CountDownLatch(urlList.size());
     }
     
     /**
      * Creates Threads and waits for the completion of all Threads
-     */
-
-    public void createThreads() {
-        ExecutorService pool = Executors.newFixedThreadPool(urlList.size());
-        CompletionService completion = new ExecutorCompletionService(pool);
-        for (int i = 0; i < urlList.size(); i++) {
-            completion.submit(new WordCollector(urlList.get(i), storer, skipWords));
+     */    
+    public void runThreads() throws Exception {
+        List<Thread> threadList = new ArrayList<>();
+        for (int i = 0; i < MAX_THREADS; i++) {
+            threadList.add(new WordCollector(urlQueue, latch, skipWords, storer));
+            threadList.get(i).start();
+            LOG.info("THREAD " + (i + 1) + " STARTED.");
         }
-        for (int i = 0; i < urlList.size(); i++) {
-            try {
-                completion.take();
-            } catch (InterruptedException ex) {
-                Logger.getLogger(WordCollection.class.getName()).log(Level.SEVERE, null, ex);
-            }
-        }
-        pool.shutdown();
+        latch.await();
     }
-
+    
     /**
      * Prints the full list of the found words.
      */
