@@ -15,7 +15,6 @@ import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
 import java.util.logging.ConsoleHandler;
 import java.util.logging.LogRecord;
 import java.util.logging.Logger;
@@ -63,19 +62,23 @@ public class WordCollector extends Thread {
     @Override
     public void run() {
         fillSkipWords();
-        while (urlQueue.size() > 0) {
+        while (true) {
             URL url = takeURLfromQueue();
-            LOG.info(url + " was taken out from the queue, " + urlQueue.size() + " URL-s remained.");
+            if ( url == null ) {
+                // TODO LP: could you please change the logger to print out the current thread as well
+                LOG.info(Thread.currentThread().getName() +": No more URL in the queue. Current thread terminates!");
+                return;
+            }
             try {
                 processContent(url);
             } catch (IOException ex) {
-                String urlName = (url == null) ? "unknown" : url.toString();
-                LOG.severe("Processing of " + urlName + " failed.");
+                LOG.severe("Processing of " + url.toString() + " failed.");
+                LOG.warning(ex.getMessage());
             } finally {
-                synchronized (latch) {
-                    latch.countDown();
-                    String urlName = (url == null) ? "unknown" : url.toString();
-                    LOG.info(urlName + " finished. The current size of the latch is: " + latch.getCount());
+                synchronized (latch) { // TODO LP: latch don't need to be synchronized when you call countDown() 
+                    latch.countDown(); // but if you would like to get the count as well you need to synchronize it to make the two step atmoic
+                    LOG.info(Thread.currentThread().getName() +":" +url.toString() // this synchrinzed block can also go into a method
+                            + " finished. The current size of the latch is: " + latch.getCount());
                 }
             }
         }
@@ -85,16 +88,10 @@ public class WordCollector extends Thread {
      * Takes out the next URL form the queue thread safe way
      * @return next URL
      */
-
     private synchronized URL takeURLfromQueue() {
-        if (urlQueue.size() > 0) {
-            try {
-                return urlQueue.poll(1000, TimeUnit.MILLISECONDS);
-            } catch (InterruptedException ex) {
-                LOG.severe("Taking out of next URL failed.");
-            }
-        }
-        return null;
+        URL url = urlQueue.poll();
+        LOG.info(Thread.currentThread().getName() + ": "+url + " was taken out from the queue, " + urlQueue.size() + " URL-s remained.");
+        return url;
     }
 
     /**
